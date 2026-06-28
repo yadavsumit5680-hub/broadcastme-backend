@@ -1,15 +1,14 @@
 const express = require('express');
 const cors = require('cors');
-const qrcode = require('qrcode');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-let qrCodeData = '';
 let isReady = false;
 let client;
+let pairingCodeRequested = false;
 
 function startClient() {
   client = new Client({
@@ -20,31 +19,25 @@ function startClient() {
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
         '--no-first-run',
         '--no-zygote',
-        '--single-process',
-        '--disable-gpu'
+        '--single-process'
       ]
     }
   });
 
-  client.on('qr', async (qr) => {
-    isReady = false;
-    qrCodeData = await qrcode.toDataURL(qr);
-    console.log('QR Generated');
-  });
-
   client.on('ready', () => {
     isReady = true;
-    qrCodeData = '';
+    pairingCodeRequested = false;
     console.log('WhatsApp Connected!');
   });
 
   client.on('disconnected', () => {
     isReady = false;
+    pairingCodeRequested = false;
     console.log('Disconnected');
-    startClient();
+    setTimeout(() => startClient(), 5000);
   });
 
   client.initialize();
@@ -52,15 +45,33 @@ function startClient() {
 
 startClient();
 
-app.get('/qr', (req, res) => {
-  if (isReady) return res.json({ status: 'connected' });
-  res.json({ qr: qrCodeData });
-});
-
+// GET /status
 app.get('/status', (req, res) => {
   res.json({ connected: isReady });
 });
 
+// GET /qr - returns pairing code instead
+app.get('/qr', (req, res) => {
+  if (isReady) return res.json({ status: 'connected' });
+  res.json({ qr: null, message: 'Use /pair endpoint' });
+});
+
+// POST /pair - phone number se pairing code lो
+app.post('/pair', async (req, res) => {
+  const { phone } = req.body;
+  if (!phone) return res.status(400).json({ error: 'Phone number required' });
+  
+  try {
+    const code = await client.requestPairingCode(phone);
+    pairingCodeRequested = true;
+    console.log('Pairing code:', code);
+    res.json({ code });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /send
 app.post('/send', async (req, res) => {
   const { phone, message } = req.body;
   if (!isReady) return res.status(400).json({ error: 'WhatsApp not connected' });
@@ -73,10 +84,15 @@ app.post('/send', async (req, res) => {
   }
 });
 
+// POST /disconnect
 app.post('/disconnect', async (req, res) => {
-  await client.logout();
-  isReady = false;
-  res.json({ success: true });
+  try {
+    await client.logout();
+    isReady = false;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
