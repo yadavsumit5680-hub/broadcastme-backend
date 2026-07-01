@@ -10,9 +10,9 @@ app.use(express.json());
 let qrCodeData = '';
 let isReady = false;
 let client;
-let pairingCodeRequested = false;
+let isInitialized = false;
 
-function startClient() {
+function createClient() {
   client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
@@ -37,22 +37,22 @@ function startClient() {
 
   client.on('ready', () => {
     isReady = true;
+    isInitialized = true;
     qrCodeData = '';
-    pairingCodeRequested = false;
     console.log('WhatsApp Connected!');
   });
 
   client.on('disconnected', () => {
     isReady = false;
-    pairingCodeRequested = false;
+    isInitialized = false;
     console.log('Disconnected');
-    setTimeout(() => startClient(), 5000);
   });
-
-  client.initialize();
 }
 
-startClient();
+// Startup pe initialize karo
+createClient();
+client.initialize();
+console.log('Client initializing...');
 
 // GET /status
 app.get('/status', (req, res) => {
@@ -68,13 +68,22 @@ app.get('/qr', (req, res) => {
 // POST /pair
 app.post('/pair', async (req, res) => {
   const { phone } = req.body;
-  if (!phone) return res.status(400).json({ error: 'Phone number required' });
+  if (!phone) return res.status(400).json({ error: 'Phone required' });
+  if (isReady) return res.json({ message: 'Already connected' });
+  
   try {
+    // Wait for client to be ready for pairing
+    let attempts = 0;
+    while (!qrCodeData && attempts < 10) {
+      await new Promise(r => setTimeout(r, 1000));
+      attempts++;
+    }
+    
     const code = await client.requestPairingCode(phone);
-    pairingCodeRequested = true;
     console.log('Pairing code generated');
     res.json({ code });
   } catch (err) {
+    console.error('Pair error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -82,23 +91,14 @@ app.post('/pair', async (req, res) => {
 // POST /send
 app.post('/send', async (req, res) => {
   const { phone, message } = req.body;
-  if (!isReady) {
-    return res.status(400).json({ error: 'Not connected' });
-  }
+  if (!isReady) return res.status(400).json({ error: 'Not connected' });
   try {
     const number = phone.replace(/\D/g, '');
-    const chatId = `${number}@c.us`;
-    await client.sendMessage(chatId, message);
-    console.log(`Message sent to ${number}`);
+    await client.sendMessage(`${number}@c.us`, message);
+    console.log(`Sent to ${number}`);
     res.status(200).json({ success: true });
   } catch (err) {
     console.error('Send error:', err.message);
-    // Restart client on frame error
-    if (err.message.includes('detached Frame') || 
-        err.message.includes('Session closed')) {
-      isReady = false;
-      setTimeout(() => startClient(), 3000);
-    }
     res.status(200).json({ success: true });
   }
 });
@@ -121,5 +121,5 @@ setInterval(() => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`));
 });
