@@ -83,7 +83,7 @@ app.post('/pair', async (req, res) => {
 app.post('/send', async (req, res) => {
   const { phone, message } = req.body;
   if (!isReady) {
-    return res.status(400).json({ error: 'WhatsApp not connected' });
+    return res.status(400).json({ error: 'Not connected' });
   }
   try {
     const number = phone.replace(/\D/g, '');
@@ -93,6 +93,12 @@ app.post('/send', async (req, res) => {
     res.status(200).json({ success: true });
   } catch (err) {
     console.error('Send error:', err.message);
+    // Restart client on frame error
+    if (err.message.includes('detached Frame') || 
+        err.message.includes('Session closed')) {
+      isReady = false;
+      setTimeout(() => startClient(), 3000);
+    }
     res.status(200).json({ success: true });
   }
 });
